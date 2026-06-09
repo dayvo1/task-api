@@ -1,9 +1,20 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 )
+
+type Task struct {
+	ID    int    `json:"id"`
+	Title string `json:"title"`
+}
+
+var tasks = []Task{
+	{ID: 1, Title: "Buy groceries"},
+	{ID: 2, Title: "Walk the dog"},
+}
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -16,7 +27,7 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		w.Write([]byte(`{"message":"task received"}`))
 	} else if r.Method == "GET" {
-		w.Write([]byte(`[{"id":1,"title":"Buy groceries"},{"id":2,"title":"Walk the dog"}]`))
+		json.NewEncoder(w).Encode(tasks)
 	} else {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
