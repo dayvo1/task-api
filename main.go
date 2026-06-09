@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
+
+	"github.com/go-chi/chi/v5"
 )
 
 type Task struct {
@@ -13,33 +16,71 @@ type Task struct {
 
 var tasks = []Task{
 	{ID: 1, Title: "Buy groceries"},
-	{ID: 2, Title: "Walk the dog"},
+	{ID: 2, Title: "Walk the Dog"},
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"status":"ok"}`))
 }
 
-func tasksHandler(w http.ResponseWriter, r *http.Request) {
+func getTasksHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	if r.Method == "POST" {
-		var t Task
-		json.NewDecoder(r.Body).Decode(&t)
-		t.ID = len(tasks) + 1
-		tasks = append(tasks, t)
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(t)
-	} else if r.Method == "GET" {
-		json.NewEncoder(w).Encode(tasks)
-	} else {
-		w.WriteHeader(http.StatusMethodNotAllowed)
+	json.NewEncoder(w).Encode(tasks)
+}
+
+func getTaskHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
 	}
+	for index := range tasks {
+		if tasks[index].ID == id {
+			json.NewEncoder(w).Encode(tasks[index])
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNotFound)
+}
+
+func createTaskHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	var t Task
+	json.NewDecoder(r.Body).Decode(&t)
+	t.ID = len(tasks) + 1
+	tasks = append(tasks, t)
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(t)
+}
+
+func deleteTaskHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	for index := range tasks {
+		if tasks[index].ID == id {
+			tasks = append(tasks[:index], tasks[index+1:]...)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNotFound)
 }
 
 func main() {
-	http.HandleFunc("/health", healthHandler)
-	http.HandleFunc("/tasks", tasksHandler)
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	r := chi.NewRouter()
+	r.Get("/health", healthHandler)
+	r.Get("/tasks", getTasksHandler)
+	r.Post("/tasks", createTaskHandler)
+	r.Get("/tasks/{id}", getTaskHandler)
+	r.Delete("/tasks/{id}", deleteTaskHandler)
+
+	log.Fatal(http.ListenAndServe(":8080", r))
 }
