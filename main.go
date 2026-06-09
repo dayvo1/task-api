@@ -25,7 +25,12 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 func tasksHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method == "POST" {
-		w.Write([]byte(`{"message":"task received"}`))
+		var t Task
+		json.NewDecoder(r.Body).Decode(&t)
+		t.ID = len(tasks) + 1
+		tasks = append(tasks, t)
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(t)
 	} else if r.Method == "GET" {
 		json.NewEncoder(w).Encode(tasks)
 	} else {
