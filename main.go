@@ -6,83 +6,58 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 )
 
-// Task API — Step 5: Postgres Database
+// Task API — Step 6: Logging Middleware
 //
-// Instead of storing tasks in a slice, we'll store them in Postgres.
-// Data now persists across server restarts.
+// Middleware is a function that wraps every request.
+// Instead of adding logging to every handler, you write it once here.
 //
-// Connecting to Postgres:
-//   conn, err := pgx.Connect(context.Background(), "postgres://user:password@host:port/dbname")
-//   if err != nil {
-//       log.Fatal(err)
-//   }
-//   defer conn.Close(context.Background())
+// How middleware works in Go:
+//   Middleware is a function that takes an http.Handler and returns an http.Handler.
 //
-//   Connection string for our docker setup:
-//   "postgres://postgres:password@localhost:5432/taskapi"
-//
-// Running a query that returns rows:
-//   rows, err := conn.Query(ctx, "SELECT id, title FROM tasks")
-//   for rows.Next() {
-//       var t Task
-//       rows.Scan(&t.ID, &t.Title)
-//       tasks = append(tasks, t)
+//   func myMiddleware(next http.Handler) http.Handler {
+//       return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+//           // code here runs BEFORE the handler
+//           next.ServeHTTP(w, r)
+//           // code here runs AFTER the handler
+//       })
 //   }
 //
-// Running a query that returns one row:
-//   var t Task
-//   err := conn.QueryRow(ctx, "SELECT id, title FROM tasks WHERE id=$1", id).Scan(&t.ID, &t.Title)
-//   if err == pgx.ErrNoRows {
-//       // not found
-//   }
+//   http.HandlerFunc is just a way to turn a function into an http.Handler.
+//   next.ServeHTTP(w, r) calls the actual handler (or next middleware in the chain).
 //
-// INSERT and get the new ID back:
-//   var id int
-//   err := conn.QueryRow(ctx, "INSERT INTO tasks (title) VALUES ($1) RETURNING id", t.Title).Scan(&id)
+// Measuring time:
+//   start := time.Now()
+//   elapsed := time.Since(start)  // returns a Duration
 //
-// DELETE and check if anything was deleted:
-//   result, err := conn.Exec(ctx, "DELETE FROM tasks WHERE id=$1", id)
-//   if result.RowsAffected() == 0 {
-//       // not found
-//   }
+// Logging:
+//   log.Printf("%s %s %v\n", r.Method, r.URL.Path, elapsed)
+//   %s = string, %v = any value (Duration prints as "1.2ms" etc.)
 //
-// context.Background() is just a default context — ignore it for now,
-// it's required by the pgx API.
+// Registering middleware with chi:
+//   r.Use(loggingMiddleware)
+//   — must be called before registering routes
 //
 // Tasks:
 //
-// 1. Declare a package-level variable: var db *pgx.Conn
+// 1. Write a loggingMiddleware function:
+//    — takes next http.Handler, returns http.Handler
+//    — record the start time before calling next
+//    — call next.ServeHTTP(w, r)
+//    — after it returns, log the method, path, and elapsed time
 //
-// 2. In main, connect to Postgres before starting the server:
-//    — use the connection string for our docker setup
-//    — store the result in db
-//    — log.Fatal if it fails
-//    — defer db.Close(context.Background())
+// 2. Register it in main with r.Use(loggingMiddleware)
+//    — add it before the route registrations
 //
-// 3. Update getTasksHandler:
-//    — query all rows from the tasks table
-//    — scan each row into a Task and append to a local slice
-//    — encode and return the slice
-//
-// 4. Update getTaskHandler:
-//    — use QueryRow with WHERE id=$1
-//    — if pgx.ErrNoRows, return 404
-//    — otherwise encode the task
-//
-// 5. Update createTaskHandler:
-//    — INSERT the title into the database
-//    — use RETURNING id to get the new ID back
-//    — respond with 201 and the new task
-//
-// 6. Update deleteTaskHandler:
-//    — DELETE from the database WHERE id=$1
-//    — check RowsAffected() — if 0, return 404
-//    — otherwise return 204
+// To run:
+//   go run main.go
+// Then make any request and watch the terminal — you should see logs like:
+//   GET /tasks 1.2ms
 
 type Task struct {
 	ID    int    `json:"id"`
@@ -90,6 +65,15 @@ type Task struct {
 }
 
 var db *pgx.Conn
+
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		next.ServeHTTP(w, r)
+		elapsed := time.Since(start)
+		log.Printf("%s %s %v\n", r.Method, r.URL.Path, elapsed)
+	})
+}
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -109,9 +93,7 @@ func getTasksHandler(w http.ResponseWriter, r *http.Request) {
 		rows.Scan(&t.ID, &t.Title)
 		tasks = append(tasks, t)
 	}
-	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(tasks)
-
 }
 
 func getTaskHandler(w http.ResponseWriter, r *http.Request) {
@@ -138,13 +120,12 @@ func createTaskHandler(w http.ResponseWriter, r *http.Request) {
 	var id int
 	err := db.QueryRow(context.Background(), "INSERT INTO tasks (title) VALUES ($1) RETURNING id", t.Title).Scan(&id)
 	if err != nil {
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	t.ID = id
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(t)
-
 }
 
 func deleteTaskHandler(w http.ResponseWriter, r *http.Request) {
@@ -157,18 +138,17 @@ func deleteTaskHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := db.Exec(context.Background(), "DELETE FROM tasks WHERE id=$1", id)
 	if err != nil {
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	if result.RowsAffected() == 0 {
-		w.WriteHeader(404)
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func main() {
-
 	var err error
 	db, err = pgx.Connect(context.Background(), "postgres://postgres:password@localhost:5432/taskapi")
 	if err != nil {
@@ -177,6 +157,7 @@ func main() {
 	defer db.Close(context.Background())
 
 	r := chi.NewRouter()
+	r.Use(loggingMiddleware)
 	r.Get("/health", healthHandler)
 	r.Get("/tasks", getTasksHandler)
 	r.Post("/tasks", createTaskHandler)
