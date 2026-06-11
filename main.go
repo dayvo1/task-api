@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -150,7 +151,7 @@ func deleteTaskHandler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	var err error
-	db, err = pgx.Connect(context.Background(), "postgres://postgres:password@localhost:5432/taskapi")
+	db, err = pgx.Connect(context.Background(), os.Getenv("DATABASE_URL"))
 	if err != nil {
 		log.Fatal(err)
 	}
