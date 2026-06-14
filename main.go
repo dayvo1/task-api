@@ -10,62 +10,25 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
-)
 
-// Task API — Step 6: Logging Middleware
-//
-// Middleware is a function that wraps every request.
-// Instead of adding logging to every handler, you write it once here.
-//
-// How middleware works in Go:
-//   Middleware is a function that takes an http.Handler and returns an http.Handler.
-//
-//   func myMiddleware(next http.Handler) http.Handler {
-//       return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-//           // code here runs BEFORE the handler
-//           next.ServeHTTP(w, r)
-//           // code here runs AFTER the handler
-//       })
-//   }
-//
-//   http.HandlerFunc is just a way to turn a function into an http.Handler.
-//   next.ServeHTTP(w, r) calls the actual handler (or next middleware in the chain).
-//
-// Measuring time:
-//   start := time.Now()
-//   elapsed := time.Since(start)  // returns a Duration
-//
-// Logging:
-//   log.Printf("%s %s %v\n", r.Method, r.URL.Path, elapsed)
-//   %s = string, %v = any value (Duration prints as "1.2ms" etc.)
-//
-// Registering middleware with chi:
-//   r.Use(loggingMiddleware)
-//   — must be called before registering routes
-//
-// Tasks:
-//
-// 1. Write a loggingMiddleware function:
-//    — takes next http.Handler, returns http.Handler
-//    — record the start time before calling next
-//    — call next.ServeHTTP(w, r)
-//    — after it returns, log the method, path, and elapsed time
-//
-// 2. Register it in main with r.Use(loggingMiddleware)
-//    — add it before the route registrations
-//
-// To run:
-//   go run main.go
-// Then make any request and watch the terminal — you should see logs like:
-//   GET /tasks 1.2ms
+	"strings"
+)
 
 type Task struct {
 	ID    int    `json:"id"`
 	Title string `json:"title"`
 }
 
+type Credentials struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
 var db *pgx.Conn
+
+var jwtSecret = []byte("supersecretkey")
 
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -73,6 +36,47 @@ func loggingMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 		elapsed := time.Since(start)
 		log.Printf("%s %s %v\n", r.Method, r.URL.Path, elapsed)
+	})
+}
+
+func loginHandler(w http.ResponseWriter, r *http.Request) {
+	var credentials Credentials
+	json.NewDecoder(r.Body).Decode(&credentials)
+	if credentials.Username != "admin" || credentials.Password != "password" {
+		w.WriteHeader(401)
+		return
+	}
+	claims := jwt.MapClaims{
+		"sub": "admin",
+		"exp": time.Now().Add(24 * time.Hour).Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString(jwtSecret)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]string{"token": signed})
+
+}
+
+func authMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+		token, err := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
+			return jwtSecret, nil
+		})
+		if err != nil || !token.Valid {
+			w.WriteHeader(401)
+			return
+		}
+		next.ServeHTTP(w, r)
+
 	})
 }
 
@@ -160,10 +164,17 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(loggingMiddleware)
 	r.Get("/health", healthHandler)
-	r.Get("/tasks", getTasksHandler)
-	r.Post("/tasks", createTaskHandler)
-	r.Get("/tasks/{id}", getTaskHandler)
-	r.Delete("/tasks/{id}", deleteTaskHandler)
+
+	r.Post("/login", loginHandler)
+
+	r.Group(func(r chi.Router) {
+		r.Use(authMiddleware)
+		r.Get("/tasks", getTasksHandler)
+		r.Get("/tasks/{id}", getTaskHandler)
+		r.Post("/tasks", createTaskHandler)
+		r.Delete("/tasks/{id}", deleteTaskHandler)
+
+	})
 
 	log.Println("server running on :8080")
 	log.Fatal(http.ListenAndServe(":8080", r))
