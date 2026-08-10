@@ -14,6 +14,8 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"strings"
+
+	"github.com/joho/godotenv"
 )
 
 type Task struct {
@@ -28,7 +30,7 @@ type Credentials struct {
 
 var db *pgx.Conn
 
-var jwtSecret = []byte("supersecretkey")
+var jwtSecret []byte
 
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -42,7 +44,7 @@ func loggingMiddleware(next http.Handler) http.Handler {
 func loginHandler(w http.ResponseWriter, r *http.Request) {
 	var credentials Credentials
 	json.NewDecoder(r.Body).Decode(&credentials)
-	if credentials.Username != "admin" || credentials.Password != "password" {
+	if credentials.Username != os.Getenv("ADMIN_USERNAME") || credentials.Password != os.Getenv("ADMIN_PASSWORD") {
 		w.WriteHeader(401)
 		return
 	}
@@ -154,6 +156,11 @@ func deleteTaskHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+
+	godotenv.Load()
+
+	jwtSecret = []byte(os.Getenv("JWT_SECRET"))
+
 	var err error
 	db, err = pgx.Connect(context.Background(), os.Getenv("DATABASE_URL"))
 	if err != nil {
